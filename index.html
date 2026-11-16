@@ -2504,36 +2504,17 @@
 				portraitGeo.computeVertexNormals();
 				let face = mesh(portraitGeo, avatarMat, g);
 				face.position.set(0, 1.7, .006);
-				// Solid convex cover glass: refraction, Fresnel reflections and a polished rim.
-				let coverGeometry = portraitGeo.clone();
-				let coverPositions = coverGeometry.attributes.position;
-				for (let i = 0; i < coverPositions.count; i++) {
-					let x = coverPositions.getX(i),
-						y = coverPositions.getY(i);
+				// Curved surface for the brief completion glint.
+				let glintGeometry = portraitGeo.clone();
+				let glintPositions = glintGeometry.attributes.position;
+				for (let i = 0; i < glintPositions.count; i++) {
+					let x = glintPositions.getX(i),
+						y = glintPositions.getY(i);
 					let rr = Math.min(1, (x * x + y * y) / (radius * radius));
-					coverPositions.setZ(i, .018 + .125 * (1 - rr))
+					glintPositions.setZ(i, .018 + .125 * (1 - rr))
 				}
-				coverPositions.needsUpdate = true;
-				coverGeometry.computeVertexNormals();
-				let glassMat = new THREE.MeshPhysicalMaterial({
-					color: 0xffffff,
-					metalness: 0,
-					roughness: .025,
-					transmission: 0,
-					transparent: true,
-					opacity: .12,
-					ior: 1.5,
-					specularIntensity: 1,
-					envMapIntensity: 2.2,
-					clearcoat: 1,
-					clearcoatRoughness: .012,
-					depthWrite: false,
-					clippingPlanes: [plane]
-				});
-				let cover = mesh(coverGeometry, glassMat, g);
-				cover.position.set(0, 1.7, .018);
-				cover.castShadow = false;
-				cover.receiveShadow = false;
+				glintPositions.needsUpdate = true;
+				glintGeometry.computeVertexNormals();
 				const glassEdgeMat = new THREE.MeshPhysicalMaterial({
 					color: 0xe8f4f2,
 					metalness: 0,
@@ -2550,7 +2531,7 @@
 				let glassEdge = torus(.607, .012, 0, 1.7, .036, glassEdgeMat, g);
 				glassEdge.castShadow = false;
 				glassEdge.receiveShadow = false;
-				// A brief softbox reflection sweeps across the convex glass on completion.
+				// A brief highlight sweeps across the portrait on completion.
 				const glintMaterial = new THREE.ShaderMaterial({
 					transparent: true,
 					depthWrite: false,
@@ -2567,7 +2548,7 @@
 					vertexShader: `varying vec2 glassUv;void main(){glassUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}`,
 					fragmentShader: `varying vec2 glassUv;uniform float sweep;uniform float strength;void main(){vec2 p=glassUv*2.0-1.0;float edge=1.0-smoothstep(.91,1.0,length(p));float d=abs(p.x+p.y*.38-sweep);float core=exp(-d*d/0.0018);float glow=exp(-d*d/0.022);float a=(core*.5+glow*.16)*edge*strength;gl_FragColor=vec4(vec3(.91,.97,1.0),a);}`
 				});
-				let glint = mesh(coverGeometry.clone(), glintMaterial, g);
+				let glint = mesh(glintGeometry, glintMaterial, g);
 				glint.position.set(0, 1.7, .022);
 				glint.castShadow = glint.receiveShadow = false;
 				glint.visible = false;
@@ -3562,6 +3543,8 @@
 					return
 				}
 				socket.onopen = () => {
+					const captureStatus = $('room-open-status');
+					if (captureStatus) captureStatus.textContent = '打印页已连接数据桥，等待直播间互动。';
 					lastLiveMsgAt = Date.now();
 					$('mode').textContent = '● 直播数据';
 					$('status').textContent = '数据桥已连接';
@@ -4063,7 +4046,9 @@
 							}
 							status.textContent = '正在启动数据桥…';
 							const j = await (await fetch('/__start-bridge?room=' + room)).json();
-							status.textContent = j.ok ? (j.already ? '数据桥已在运行，正在连接…' : '数据桥已启动，正在连接直播评论…') : '启动失败：' + (j.error || '');
+							status.textContent = j.ok
+								? (socket?.readyState === WebSocket.OPEN ? '打印页已连接数据桥，等待直播间互动。' : '正在连接数据桥…')
+								: '启动失败：' + (j.error || '');
 							if (j.ok) connectBridge();
 						} else {
 							status.textContent = '正在停止数据桥…';
@@ -4080,7 +4065,10 @@
 				$(id).disabled = true;
 				try {
 					status.textContent = await window.pywebview.api[method]($('room-input').value);
-					if (method === 'start_capture') connectBridge()
+					if (method === 'start_capture') {
+						if (socket?.readyState === WebSocket.OPEN) status.textContent = '打印页已连接数据桥，等待直播间互动。';
+						connectBridge()
+					}
 				} catch (e) {
 					status.textContent = '操作失败：' + e.message
 				} finally {

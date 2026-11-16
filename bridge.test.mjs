@@ -189,3 +189,38 @@ test('Like 协议帧：广播点赞并附带头像',()=>{
   assert.ok(ev,'应广播协议级点赞');assert.equal(ev.avatar,avatar);assert.equal(ev.count,2);assert.equal(ev.userId,'12345');
   _injectHubForTest(null);
 });
+
+test('同一个用户三条 666 按消息 ID 转发，重发帧去重', () => {
+  const events = [];
+  _injectHubForTest({broadcast: event => events.push(event), clientCount: () => 1});
+  try {
+    const user = fld(3, Buffer.from('评论测试观众'));
+    for (const id of [1001, 1001, 1002, 1003]) {
+      const body = Buffer.concat([fld(1, vint(2, id)), fld(2, user), fld(3, Buffer.from('666'))]);
+      _handleWSFrameForTest(fld(1, Buffer.concat([fld(1, Buffer.from('WebcastChatMessage')), fld(2, body)])));
+    }
+    assert.equal(events.length, 3);
+    assert.ok(events.every(event => event.type === 'comment' && event.text === '666' && event.name === '评论测试观众'));
+  } finally {
+    _injectHubForTest(null);
+  }
+});
+
+test('小爱心协议消息使用送礼者，并且连击累计只转发增量', () => {
+  const events = [];
+  _injectHubForTest({broadcast: event => events.push(event), clientCount: () => 1});
+  try {
+    const sender = Buffer.concat([vint(1, 777), fld(3, Buffer.from('送礼观众'))]);
+    const giftName = Buffer.from('小爱心');
+    const gift = Buffer.concat([vint(0, (16 << 3) | 2).subarray(1), vint(0, giftName.length).subarray(1), giftName]);
+    for (const [id, count] of [[201, 1], [201, 1], [202, 2], [203, 3], [204, 3]]) {
+      const body = Buffer.concat([fld(1, vint(2, id)), vint(2, 888), vint(6, count),
+        fld(7, sender), vint(11, 999), fld(15, gift)]);
+      _handleWSFrameForTest(fld(1, Buffer.concat([fld(1, Buffer.from('WebcastGiftMessage')), fld(2, body)])));
+    }
+    assert.deepEqual(events.map(({type, name, gift, count}) => [type, name, gift, count]),
+      Array.from({length: 3}, () => ['gift', '送礼观众', 'heart', 1]));
+  } finally {
+    _injectHubForTest(null);
+  }
+});

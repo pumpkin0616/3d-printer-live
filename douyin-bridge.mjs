@@ -153,6 +153,49 @@ function eachEnvelope(buf, cb, depth = 0) {
   }
 }
 
+function handleGiftMessage(payload) {
+  if (!hubRef) return;
+  const fields = pbDecode(payload);
+  const bytes = (list, n) => list.find(f => f.n === n && f.wire === 2)?.buf;
+  const number = (list, n) => list.find(f => f.n === n && f.wire === 0)?.num;
+  const nameOf = (list, n) => bytes(list, n)?.toString('utf8').trim();
+  const sender = bytes(fields, 7);
+  const gift = bytes(fields, 15);
+  if (!sender || !gift) return;
+  const senderFields = pbDecode(sender);
+  const name = nameOf(senderFields, 3);
+  const raw = nameOf(pbDecode(gift), 16);
+  if (!name || isJunkName(name) || !raw) return;
+  const common = bytes(fields, 1);
+  const messageId = common && number(pbDecode(common), 2);
+  if (messageId > 0n) {
+    if (seenGiftMessages.has(messageId)) return;
+    seenGiftMessages.add(messageId);
+    if (seenGiftMessages.size > 4096) seenGiftMessages.delete(seenGiftMessages.values().next().value);
+  }
+  protocolGiftSeen = true;
+  const group = number(fields, 11);
+  const combo = number(fields, 6) || number(fields, 5);
+  let count = Number(combo || number(fields, 4) || 1n);
+  if (!Number.isSafeInteger(count) || count < 1) return;
+  if (group > 0n && combo > 0n) {
+    const key = [number(senderFields, 1) || name, number(fields, 2) || raw, group].join(':');
+    const previous = giftCombos.get(key) || 0;
+    if (count <= previous) return;
+    giftCombos.set(key, count);
+    if (giftCombos.size > 4096) giftCombos.delete(giftCombos.keys().next().value);
+    count -= previous;
+  }
+  const avatar = extractUser(sender)?.avatar || lookupAvatar(name) || '';
+  total.gift++;
+  lastEventAt = Date.now();
+  const kind = mapGift(raw);
+  for (let remaining = count; remaining > 0; remaining -= 100) {
+    hubRef.broadcast({type: 'gift', room: currentRoom, name, avatar, raw, gift: kind, count: Math.min(100, remaining)});
+  }
+  console.log('[' + stamp() + '] 🎁 %s 送出 %s x%d → %s（协议级）', name, raw, count, kind);
+}
+
 function handleWSFrame(buf) {
   try {
     let payload = buf;
@@ -164,6 +207,31 @@ function handleWSFrame(buf) {
       // 消息体里每个 User 结构都自带头像，全部喂进花名册（RoomUserSeq 一次带多名活跃观众）。
       const users = collectUsers(pl);
       for (const u of users) feedAvatar(u.name, u.avatar, '协议帧');
+      if (mt[1] === 'Gift') {
+        handleGiftMessage(pl);
+        return;
+      }
+      if (mt[1] === 'Chat') {
+        const fields = pbDecode(pl);
+        const user = fields.find(f => f.n === 2 && f.wire === 2);
+        const text = fields.find(f => f.n === 3 && f.wire === 2)?.buf.toString('utf8').trim();
+        const nickname = user && pbDecode(user.buf).find(f => f.n === 3 && f.wire === 2)?.buf.toString('utf8').trim();
+        if (!hubRef || !text || !nickname || isJunkName(nickname)) return;
+        const common = fields.find(f => f.n === 1 && f.wire === 2);
+        const id = common && pbDecode(common.buf).find(f => f.n === 2 && f.wire === 0)?.num;
+        if (id > 0n) {
+          if (seenChatMessages.has(id)) return;
+          seenChatMessages.add(id);
+          if (seenChatMessages.size > 4096) seenChatMessages.delete(seenChatMessages.values().next().value);
+        }
+        protocolChatSeen = true;
+        const avatar = extractUser(user.buf)?.avatar || lookupAvatar(nickname) || '';
+        total.comment++;
+        lastEventAt = Date.now();
+        hubRef.broadcast({type: 'comment', room: currentRoom, name: nickname, text, avatar});
+        console.log('[' + stamp() + '] 💬 %s：%s（协议级）', nickname, text);
+        return;
+      }
       const type = mt[1] === 'Like' ? 'like' : mt[1] === 'Social' ? 'follow' : mt[1] === 'Member' ? 'join' : null;
       if (type === 'like') {
         const fields = pbDecode(pl);
@@ -540,13 +608,16 @@ export function _injectHubForTest(h) { hubRef = h }
 export function _avatarStateForTest() { return { avatars: { ...avatars }, roster: [...roster.entries()], cache: [...avatarCache.entries()], normMap: [...normMap.entries()] } }
 let lastLikes = null, clientCount = 0, chatSeen = false, historySkipped = false, owner = '';
 const roster = new Map(), lastSeen = new Map();
-const seen = new Set(), seenLikeMessages = new Set(), avatars = {};
+const seen = new Set(), seenLikeMessages = new Set(), seenChatMessages = new Set(), avatars = {};
+let protocolChatSeen = false, protocolGiftSeen = false;
+const seenGiftMessages = new Set(), giftCombos = new Map();
 const total = { comment: 0, gift: 0, like: 0, join: 0 };
 let lastEventAt = 0, lastNavFix = 0, lastWsLikeAt = 0, lastWsJoinAt = 0, cdpEventSink = null, lastFollowerCount = null, lastFollowerPoll = 0;
 
 function resetRoomState() {
   lastLikes = null; lastWsLikeAt = 0; chatSeen = false; historySkipped = false; owner = '';
-  roster.clear(); lastSeen.clear(); seen.clear(); seenLikeMessages.clear();
+  roster.clear(); lastSeen.clear(); seen.clear(); seenLikeMessages.clear(); seenChatMessages.clear(); protocolChatSeen = false;
+  seenGiftMessages.clear(); giftCombos.clear(); protocolGiftSeen = false;
   for (const k of Object.keys(avatars)) delete avatars[k];
   hoverTried.clear();
   total.comment = total.gift = total.like = total.join = 0;
@@ -846,7 +917,7 @@ async function run(hub) {
     }
     for (const line of diffNew(s.lines || [], seen, 80, s.rowIds)) {
       const ev = parseChatLine(line);
-      if (!ev) continue;
+      if (!ev || (ev.kind === 'comment' && protocolChatSeen) || (ev.kind === 'gift' && protocolGiftSeen)) continue;
       const key = normKey(ev.name);
       const avatar = avatars[ev.name] || (key && (normMap.get(key) || normAvatars[key])) || lookupAvatar(ev.name) || roster.get(ev.name) || '';
       roster.set(ev.name, avatar);
@@ -867,6 +938,7 @@ async function run(hub) {
           if (!avatars[ev.name] && !(key && normMap.get(key)) && !avatar) await hoverResolveAvatars([ev.name]);
           if (room !== currentRoom) return;
           const resolved = avatars[ev.name] || (key && normMap.get(key)) || avatar;
+          if ((ev.kind === 'comment' && protocolChatSeen) || (ev.kind === 'gift' && protocolGiftSeen)) return;
           if (ev.kind === 'gift') emit({ type: 'gift', name: ev.name, gift: mapGift(ev.gift), raw: ev.gift, count: ev.count, avatar: resolved || '' });
           else emit({ type: 'comment', name: ev.name, text: ev.text, avatar: resolved || '' });
         }).catch(err => console.error('评论头像补取失败：', err.message));
