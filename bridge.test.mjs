@@ -9,6 +9,14 @@ test('进场与系统消息',()=>{assert.deepEqual(parseChatLine('小小水晶�
 test('点赞计数解析',()=>{assert.equal(parseLike('100本场点赞'),100);assert.equal(parseLike('8 本场点赞'),8);assert.equal(parseLike('70.1万本场点赞'),701000);assert.equal(parseLike('71.1万本场点赞'),711000);assert.equal(parseLike('人气榜100+'),null)});
 test('增量弹幕去重与顶端裁剪',()=>{const seen=new Set();assert.equal(diffNew(['天观星系：11111','马达研究者：打印'],seen).length,2);assert.equal(diffNew(['天观星系：11111','马达研究者：打印'],seen).length,0);assert.deepEqual(diffNew(['天观星系：11111','马达研究者：打印','蛋小黑：为啥没我?'],seen),['蛋小黑：为啥没我?']);assert.equal(diffNew(['马达研究者：打印','蛋小黑：为啥没我?'],seen).length,0)});
 test('同文连发不去重',()=>{const seen=new Set();assert.equal(diffNew(['天观星系：999','天观星系：999'],seen).length,2);assert.equal(diffNew(['天观星系：999','天观星系：999'],seen).length,0)});
+test('同一观众跨轮询连发三条 666，每条只采集一次', () => {
+  const seen = new Set();
+  const line = '小明：666';
+  assert.deepEqual(diffNew([line], seen, 80, ['1']), [line]);
+  assert.deepEqual(diffNew([line, line], seen, 80, ['1', '2']), [line]);
+  assert.deepEqual(diffNew([line, line], seen, 80, ['2', '3']), [line]);
+  assert.deepEqual(diffNew([line, line], seen, 80, ['2', '3']), []);
+});
 test('未知行不产生事件',()=>{assert.equal(parseChatLine('小时榜100+'),null);assert.equal(parseChatLine('原画可试看25s'),null)});
 test('昵称归一化匹配头像',()=>{assert.equal(normKey('小 明 🌸'),'小明');assert.equal(normKey('  花火 '),'花火');assert.equal(normKey('😭👍豆豆'),'豆豆')});
 test('protobuf解码：从协议消息提取昵称和头像',()=>{

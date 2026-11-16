@@ -279,7 +279,13 @@ export function parseLike(text) {
 }
 
 // 从弹幕行列表里找出新行：从末尾向前扫到已见签名即停；签名缓冲防重复。
-export function diffNew(lines, seen, cap = 80) {
+export function diffNew(lines, seen, cap = 80, rowIds) {
+  if (rowIds) {
+    const fresh = lines.filter((_, index) => !seen.has(rowIds[index]));
+    for (const id of rowIds) seen.add(id);
+    while (seen.size > 600) seen.delete(seen.values().next().value);
+    return fresh.slice(-cap);
+  }
   const fresh = [];
   for (let i = lines.length - 1; i >= 0 && fresh.length < cap; i--) {
     if (seen.has(lines[i])) break;
@@ -323,7 +329,7 @@ export function allocateLikes(delta, roster, state, cap = 3) {
 // —— 页面内采集脚本（不依赖混淆类名，按文本特征定位） ——
 
 const COLLECT = String.raw`(() => {
-  const out = { likes: null, lines: [], avatars: {}, owner: '', href: location.href };
+  const out = { likes: null, lines: [], rowIds: [], avatars: {}, owner: '', href: location.href };
   const om = document.title.match(/^(.+?)的抖音直播间/);
   if (om) out.owner = om[1];
   for (const e of document.querySelectorAll('span,div,b,p')) {
@@ -357,7 +363,18 @@ const COLLECT = String.raw`(() => {
     bestSet.add(best);
   }
   const chosen = [...bestSet].filter(a => ![...bestSet].some(b => b !== a && b.contains(a)));
-  out.lines = chosen.map(n => (n.innerText || '').replace(/\s+/g, ' ').trim()).filter(Boolean);
+  const rows = window.__printerChatRows ||= { ids: new WeakMap(), sequence: 0 };
+  for (const node of chosen) {
+    const text = (node.innerText || '').replace(/\s+/g, ' ').trim();
+    if (!text) continue;
+    let row = rows.ids.get(node);
+    if (!row || row.text !== text) {
+      row = { text, id: performance.timeOrigin + ':' + (++rows.sequence) };
+      rows.ids.set(node, row);
+    }
+    out.lines.push(text);
+    out.rowIds.push(row.id);
+  }
   if (tick % 2 === 0 || !window.__avMap) {
     const av = {};
     for (const img of document.querySelectorAll('img')) {
@@ -830,10 +847,10 @@ async function run(hub) {
     if (!historySkipped && (s.lines || []).length) {
       historySkipped = true;
       let skipped = 0;
-      for (const line of s.lines) if (!seen.has(line)) { seen.add(line); skipped++; }
+      for (const id of s.rowIds) if (!seen.has(id)) { seen.add(id); skipped++; }
       if (skipped) console.log('[' + stamp() + '] ⏭ 跳过挂接前已存在的 %d 条历史弹幕（不打印旧评论）', skipped);
     }
-    for (const line of diffNew(s.lines || [], seen)) {
+    for (const line of diffNew(s.lines || [], seen, 80, s.rowIds)) {
       const ev = parseChatLine(line);
       if (!ev) continue;
       const key = normKey(ev.name);
