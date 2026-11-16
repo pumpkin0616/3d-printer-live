@@ -942,7 +942,7 @@ async function main() {
   }, 2000).unref?.();
   const wsPort = Number(process.argv[3]) || 8765;
   const hub = startWSServer(wsPort, {
-    identity: __dirname, fallbackPorts: process.argv[3] ? 0 : 9,
+    identity: __dirname, isReady: () => Boolean(cdpRef), fallbackPorts: process.argv[3] ? 0 : 9,
     onStatus: p => console.log('[' + stamp() + '] ✅ 数据桥服务 ws://127.0.0.1:' + p + '（等待打印页面接入）'),
     onError: err => {
       console.error('[' + stamp() + '] ❌ 端口 ' + wsPort + ' 启动失败（' + err.code + '），可能有另一个数据桥在运行，本实例退出');

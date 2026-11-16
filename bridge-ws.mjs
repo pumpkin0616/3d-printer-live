@@ -62,10 +62,10 @@ function controlFrame(opcode, payload = Buffer.alloc(0)) {
   return Buffer.concat([header, payload]);
 }
 
-export function startWSServer(port, { onMessage, onStatus, onError, identity = null, fallbackPorts = 0 } = {}) {
+export function startWSServer(port, { onMessage, onStatus, onError, identity = null, fallbackPorts = 0, isReady = () => true } = {}) {
   const clients = new Set();
   const server = http.createServer((req, res) => {
-    if (req.url === '/health') { res.writeHead(200, {'content-type':'application/json'}); res.end(JSON.stringify({service:'avatar-printer', identity, port:server.address().port})); return; }
+    if (req.url === '/health') { res.writeHead(200, {'content-type':'application/json'}); res.end(JSON.stringify({service:'avatar-printer', identity, port:server.address().port, ready:isReady()})); return; }
     res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
     res.end('avatar-printer data bridge running');
   });

@@ -474,7 +474,6 @@ async function openLiveRoomWindow(){
  if(window.pywebview?.api){try{status.textContent=await window.pywebview.api.open_live_room(room)}catch(e){status.textContent='Open failed: '+e.message}return}
  try{localStorage.setItem('printer-live-room',room)}catch(e){}
  try{status.textContent='Opening the live window…';const j=await(await fetch('/__open-live?room='+room+'&debug=1')).json();status.textContent=j.ok?'Live window opened (app window). Log in there, then click Start Capture.':'Open failed: '+(j.error||'')}catch(e){status.textContent='Open failed: '+e.message}
- status.textContent='Live window requested — log in there. Logging in does not connect the bridge.';
 }
 $('room-open').onclick=openLiveRoomWindow;
 for(const [id,method] of [['capture-start','start_capture'],['capture-stop','stop_capture']])$(id).onclick=async()=>{

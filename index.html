@@ -474,7 +474,6 @@ async function openLiveRoomWindow(){
  if(window.pywebview?.api){try{status.textContent=await window.pywebview.api.open_live_room(room)}catch(e){status.textContent='打开失败：'+e.message}return}
  try{localStorage.setItem('printer-live-room',room)}catch(e){}
  try{status.textContent='正在打开独立直播窗口…';const j=await(await fetch('/__open-live?room='+room+'&debug=1')).json();status.textContent=j.ok?'独立直播窗口已打开（应用窗口），请在其中登录后点「开始抓取」。':'打开失败：'+(j.error||'')}catch(e){status.textContent='打开失败：'+e.message}
- status.textContent='已请求打开直播间，请在新窗口登录。登录不会自动连接数据桥。';
 }
 $('room-open').onclick=openLiveRoomWindow;
 for(const [id,method] of [['capture-start','start_capture'],['capture-stop','stop_capture']])$(id).onclick=async()=>{
