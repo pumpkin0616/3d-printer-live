@@ -179,10 +179,13 @@ test('Like 协议帧：广播点赞并附带头像',()=>{
   const avatar='https://p3.douyinpic.com/aweme/100x100/aweme-avatar/liker.jpeg';
   const got=[];
   _injectHubForTest({broadcast:ev=>got.push(ev),clientCount:()=>1});
-  const user=Buffer.concat([fld(3,Buffer.from('协议点赞丙')),fld(9,fld(1,Buffer.from(avatar)))]);
-  const like=Buffer.concat([fld(1,Buffer.from([0x08,0x01])),fld(2,user),vint(3,2)]);
-  _handleWSFrameForTest(fld(1,Buffer.concat([fld(1,Buffer.from('WebcastLikeMessage')),fld(2,like)])));
+  const user=Buffer.concat([vint(1,12345),fld(3,Buffer.from('协议点赞丙')),fld(9,fld(1,Buffer.from(avatar)))]);
+  const like=Buffer.concat([fld(1,vint(2,88)),vint(2,2),vint(3,999),fld(5,user)]);
+  const frame=fld(1,Buffer.concat([fld(1,Buffer.from('WebcastLikeMessage')),fld(2,like)]));
+  _handleWSFrameForTest(frame);
+  _handleWSFrameForTest(frame);
+  assert.equal(got.filter(e=>e.type==='like').length,1);
   const ev=got.find(e=>e.type==='like'&&e.name==='协议点赞丙');
-  assert.ok(ev,'应广播协议级点赞');assert.equal(ev.avatar,avatar);assert.ok(ev.count>=1);
+  assert.ok(ev,'应广播协议级点赞');assert.equal(ev.avatar,avatar);assert.equal(ev.count,2);assert.equal(ev.userId,'12345');
   _injectHubForTest(null);
 });

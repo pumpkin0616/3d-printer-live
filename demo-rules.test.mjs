@@ -18,3 +18,15 @@ test('插队任务的直播标记不污染普通队列，重连后仍保留礼�
  assert.equal(r.queue.filter(j=>j.live).length,3);
  assert.ok(result.jobs.every(j=>j.priority&&j.live));
 });
+
+test('真实点赞按直播间和用户累计，每满 30 下打印一次', async () => {
+  const {LiveLikeCounter} = await import('./demo-rules.mjs');
+  const likes = new LiveLikeCounter();
+  assert.equal(likes.add({room: '1', userId: 'a', count: 29}), 0);
+  assert.equal(likes.add({room: '1', userId: 'b', count: 1}), 0);
+  assert.equal(likes.add({room: '1', count: 100}), 0);
+  assert.equal(likes.add({room: '1', userId: 'a', count: 33}), 2);
+  assert.equal(likes.add({room: '1', userId: 'a', count: 28}), 1);
+  likes.setRoom('2');
+  assert.equal(likes.add({room: '2', userId: 'b', count: 29}), 0);
+});

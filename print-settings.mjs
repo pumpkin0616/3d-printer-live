@@ -2,6 +2,7 @@ export const PRINT_DEFAULTS={giftPriority:true,idleSeconds:30,demoGapMs:30000,co
 export function printOptions(settings,type,source){
  const key=type!=='like'?type:({'评论':'comment','进场':'join','点赞':'like','关注':'follow',comment:'comment',join:'join',like:'like',follow:'follow',Comment:'comment',Join:'join',Like:'like',Follow:'follow'}[source]);
  if(!key)return {};
+ if(key==='like')return {count:1,size:'small',priority:false};
  const gift=type!=='like';const count=Number(settings[key+'Count']);
  return {count:Number.isInteger(count)&&count>=1&&count<=10?count:PRINT_DEFAULTS[key+'Count'],size:settings[(gift?'gift':key)+'Size']==='large'?'large':'small',priority:gift&&settings.giftPriority!==false};
 }
@@ -12,7 +13,7 @@ export function renderPrintSettings(body,settings,save){
  const select=(group,key,title,options)=>{const label=document.createElement('label');label.className='print-setting-field';const span=document.createElement('span');span.textContent=title;const input=document.createElement('select');for(const [value,text] of options){const o=document.createElement('option');o.value=String(value);o.textContent=text;input.append(o)}input.value=String(settings[key]);input.onchange=()=>{settings[key]=key.endsWith('Count')||key==='idleSeconds'||key==='demoGapMs'?Number(input.value):input.value;save()};label.append(span,input);group.append(label)};
  const sizes=[['small','小头像'],['large','大头像']];const counts=[1,2,3,5,10].map(n=>[n,n+' 张']);
  const trigger=section('打印触发');
- for(const [key,title] of [['comment','评论打印'],['join','进场打印'],['like','点赞打印'],['follow','关注打印']]){const card=document.createElement('div');card.className='print-setting-card';trigger.append(card);toggle(card,key,title);select(card,key+'Count','每次张数',counts);select(card,key+'Size','头像大小',sizes)}
+ for(const [key,title] of [['comment','评论打印'],['join','进场打印'],['like','点赞打印'],['follow','关注打印']]){const card=document.createElement('div');card.className='print-setting-card';trigger.append(card);if(key==='like'){toggle(card,key,title,'每位观众累计 30 个赞打印 1 张小头像');continue}toggle(card,key,title);select(card,key+'Count','每次张数',counts);select(card,key+'Size','头像大小',sizes)}
  const gifts=section('礼物打印');toggle(gifts,'gift','礼物触发打印');toggle(gifts,'giftPriority','礼物优先插队','立即切换到礼物；未完成的普通任务保留后重打，礼物之间按顺序处理');select(gifts,'giftSize','头像大小',sizes);
  for(const [key,title] of [['heart','爱心'],['beer','啤酒'],['lollipop','棒棒糖'],['other','其他礼物']])select(gifts,key+'Count',title+' / 每个',counts);
  const voice=section('语音播报');toggle(voice,'giftVoice','礼物答谢');toggle(voice,'joinVoice','进场欢迎');

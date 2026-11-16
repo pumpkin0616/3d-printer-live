@@ -165,10 +165,31 @@ function handleWSFrame(buf) {
       const users = collectUsers(pl);
       for (const u of users) feedAvatar(u.name, u.avatar, '协议帧');
       const type = mt[1] === 'Like' ? 'like' : mt[1] === 'Social' ? 'follow' : mt[1] === 'Member' ? 'join' : null;
+      if (type === 'like') {
+        const fields = pbDecode(pl);
+        const standardUser = fields.find(f => f.n === 5 && f.wire === 2);
+        const user = standardUser || fields.find(f => f.n === 2 && f.wire === 2);
+        if (!user) return;
+        const userFields = pbDecode(user.buf);
+        const id = userFields.find(f => f.n === 1 && f.wire === 0)?.num;
+        const countField = standardUser ? 2 : 3;
+        const count = Number(fields.find(f => f.n === countField && f.wire === 0)?.num);
+        if (!(id > 0n) || !Number.isSafeInteger(count) || count <= 0) return;
+        const common = fields.find(f => f.n === 1 && f.wire === 2);
+        const messageId = common && pbDecode(common.buf).find(f => f.n === 2 && f.wire === 0)?.num;
+        if (messageId > 0n) {
+          if (seenLikeMessages.has(messageId)) return;
+          seenLikeMessages.add(messageId);
+          if (seenLikeMessages.size > 4096) seenLikeMessages.delete(seenLikeMessages.values().next().value);
+        }
+        const actor = extractUser(user.buf);
+        const name = actor?.name || userFields.find(f => f.n === 3 && f.wire === 2)?.buf.toString('utf8');
+        emitLike({name, avatar: actor?.avatar, userId: String(id)}, count);
+        return;
+      }
       const actor = users[0];
       if (!actor || !type) return;
-      if (type === 'like') emitLike(actor);
-      else if (type === 'follow') emitFollow(actor);
+      if (type === 'follow') emitFollow(actor);
       else if (type === 'join') emitJoinWS(actor);
     });
   } catch { }
@@ -228,7 +249,6 @@ function feedAvatar(name, avatar, via = '页面') {
   feedAvatarCache(name, avatar);
   if (roster.get(name) !== avatar) {
     if (!roster.has(name)) {
-      likeState.used.clear();
       console.log('[' + stamp() + '] 🧑 首次入库 %s 的头像（%s）', name, via);
     }
     roster.set(name, avatar);
@@ -236,21 +256,10 @@ function feedAvatar(name, avatar, via = '页面') {
   }
 }
 
-function emitLike(user) {
-  const nowMs = Date.now();
-  likeTokens = Math.min(20, likeTokens + (nowMs - likeTokensAt) / 400);
-  likeTokensAt = nowMs;
-  const allowed = Math.min(3, Math.floor(likeTokens));
-  likeTokens -= allowed;
-  lastWsLikeAt = nowMs;
-  if (allowed <= 0) {
-    if (nowMs - lastThrottleLog > 10000) { lastThrottleLog = nowMs; console.log('[' + stamp() + '] ❤️ 点赞高峰限速中'); }
-    return;
-  }
-  total.like += allowed;
-  lastEventAt = nowMs;
-  hubRef.broadcast({ type: 'like', name: user.name, avatar: user.avatar || '', count: allowed });
-  console.log('[' + stamp() + '] ❤️ %s 点赞 +%d（协议级）', user.name, allowed);
+function emitLike(user, count) {
+  lastWsLikeAt = lastEventAt = Date.now();
+  total.like += count;
+  hubRef.broadcast({ type: 'like', room: currentRoom, name: user.name, avatar: user.avatar || '', userId: user.userId, count });
 }
 
 function emitFollow(user) {
@@ -530,16 +539,15 @@ export function _handleWSFrameForTest(buf) { handleWSFrame(buf) }
 export function _injectHubForTest(h) { hubRef = h }
 export function _avatarStateForTest() { return { avatars: { ...avatars }, roster: [...roster.entries()], cache: [...avatarCache.entries()], normMap: [...normMap.entries()] } }
 let lastLikes = null, clientCount = 0, chatSeen = false, historySkipped = false, owner = '';
-const roster = new Map(), likeState = { idx: 0, used: new Map() }, lastSeen = new Map();
-const seen = new Set(), avatars = {};
+const roster = new Map(), lastSeen = new Map();
+const seen = new Set(), seenLikeMessages = new Set(), avatars = {};
 const total = { comment: 0, gift: 0, like: 0, join: 0 };
-let likeTokens = 20, likeTokensAt = Date.now(), lastThrottleLog = 0, lastEventAt = 0, lastNavFix = 0, lastWsLikeAt = 0, lastWsJoinAt = 0, cdpEventSink = null, lastFollowerCount = null, lastFollowerPoll = 0;
+let lastEventAt = 0, lastNavFix = 0, lastWsLikeAt = 0, lastWsJoinAt = 0, cdpEventSink = null, lastFollowerCount = null, lastFollowerPoll = 0;
 
 function resetRoomState() {
-  lastLikes = null; chatSeen = false; historySkipped = false; owner = '';
-  roster.clear(); lastSeen.clear(); seen.clear();
+  lastLikes = null; lastWsLikeAt = 0; chatSeen = false; historySkipped = false; owner = '';
+  roster.clear(); lastSeen.clear(); seen.clear(); seenLikeMessages.clear();
   for (const k of Object.keys(avatars)) delete avatars[k];
-  likeState.used.clear(); likeState.idx = 0;
   hoverTried.clear();
   total.comment = total.gift = total.like = total.join = 0;
 }
@@ -816,7 +824,6 @@ async function run(hub) {
     for (const [n, a] of Object.entries(s.avatars || {})) {
       if (!a || !n || n === owner || isJunkName(n)) continue;
       if (!roster.has(n) && !(s.lines || []).some(line => parseChatLine(line)?.name === n)) continue;
-      if (!roster.has(n)) likeState.used.clear();
       feedAvatar(n, a, '页面头像');
     }
     const normAvatars = {};
@@ -824,21 +831,8 @@ async function run(hub) {
     if (s.likes != null) {
       if (lastLikes == null) lastLikes = s.likes;
       else if (s.likes > lastLikes && Date.now() - lastWsLikeAt > 30000) {
-        const delta = Math.min(s.likes - lastLikes, 100);
-        const pool = [...roster.entries()].sort((x, y) => (Number(!!y[1]) - Number(!!x[1])) || ((lastSeen.get(y[0]) || 0) - (lastSeen.get(x[0]) || 0)));
-        const events = allocateLikes(delta, pool, likeState);
-        const nowMs = Date.now();
-        likeTokens = Math.min(20, likeTokens + (nowMs - likeTokensAt) / 400);
-        likeTokensAt = nowMs;
-        const budget = Math.floor(likeTokens);
-        const allowed = Math.min(events.length, budget);
-        likeTokens -= allowed;
-        if (events.length > allowed && nowMs - lastThrottleLog > 10000) {
-          lastThrottleLog = nowMs;
-          console.log('[' + stamp() + '] ❤️ 点赞风暴限速中（高峰期限流，平时秒放行）');
-        }
-        for (const ev of events.slice(0, allowed)) emit({ type: 'like', ...ev });
-        if (delta > 0 && !events.length && !roster.size) console.log('[' + stamp() + '] ❤️ 点赞 +%d（观众名单还没就绪，先不打印）', delta);
+        const count = s.likes - lastLikes;
+        emit({ type: 'like', room: currentRoom, count });
       }
       lastLikes = s.likes;
     }
@@ -855,7 +849,6 @@ async function run(hub) {
       if (!ev) continue;
       const key = normKey(ev.name);
       const avatar = avatars[ev.name] || (key && (normMap.get(key) || normAvatars[key])) || lookupAvatar(ev.name) || roster.get(ev.name) || '';
-      if (!roster.has(ev.name)) likeState.used.clear();
       roster.set(ev.name, avatar);
       lastSeen.set(ev.name, Date.now());
       if (ev.kind !== 'comment') parsedNames.push(ev.name);

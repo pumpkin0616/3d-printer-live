@@ -833,7 +833,7 @@
 				PrinterAudio
 			} from './printer-audio.mjs?v=recorded-only-4';
 			import {
-				DemoRules,
+				DemoRules, LIKES_PER_PRINT, LiveLikeCounter,
 				RULES
 			} from './demo-rules.mjs';
 			import * as THREE from './assets/three.module.js';
@@ -850,7 +850,7 @@
 			scene.background = new THREE.Color('#d8c8b3');
 			scene.fog = null;
 			const camera = new THREE.PerspectiveCamera(36, 1, .1, 500);
-			camera.position.set(6.8, 9.6, 24.5);
+			camera.position.set(-0.383, 6.097, 28.16);
 			const renderer = new THREE.WebGLRenderer({
 				antialias: false,
 				powerPreference: 'high-performance'
@@ -866,7 +866,7 @@
 			renderer.shadowMap.autoUpdate = false;
 			const sceneOutput = new SceneOutput(renderer);
 			const controls = new OrbitControls(camera, renderer.domElement);
-			controls.target.set(3.6, 2.3, 1.3);
+			controls.target.set(0.352, 4.748, 1.204);
 			controls.enableDamping = true;
 			controls.maxPolarAngle = Math.PI / 2 - .05;
 			controls.minDistance = 3;
@@ -1814,11 +1814,11 @@
 			portraitView.onclick = () => {
 				closeView = !closeView;
 				if (closeView) {
-					camera.position.set(2, 4.8, 11);
-					controls.target.set(1.5, 1.65, 2.2)
+					camera.position.set(-0.128, 5.629, 18.812);
+					controls.target.set(0.352, 4.748, 1.204)
 				} else {
-					camera.position.set(6.8, 9.6, 24.5);
-					controls.target.set(3.6, 2.3, 1.3)
+					camera.position.set(-0.383, 6.097, 28.16);
+					controls.target.set(0.352, 4.748, 1.204)
 				}
 				controls.update();
 				portraitView.textContent = closeView ? '返回全景' : '头像近景'
@@ -2669,6 +2669,30 @@
 				liveEvent('like', randomPerson(), 1, null, '30秒无互动·测试头像', false)
 			}
 
+			let previousPrintView = null;
+			let printCameraTransition = null;
+			function setPrintCloseUp(enabled) {
+				if (printCameraTransition ? printCameraTransition.enabled === enabled : Boolean(previousPrintView) === enabled) return;
+				const from = {position: camera.position.toArray(), target: controls.target.toArray()};
+				if (enabled && !previousPrintView) previousPrintView = from;
+				const to = enabled ? {position: [-0.128, 5.629, 18.812], target: [0.352, 4.748, 1.204]} : previousPrintView;
+				printCameraTransition = {enabled, from, to, start: performance.now()};
+			}
+
+			function updatePrintCamera(now) {
+				if (!printCameraTransition) return;
+				const {enabled, from, to, start} = printCameraTransition;
+				const progress = Math.max(0, Math.min(1, (now - start) / 750));
+				const eased = progress * progress * (3 - 2 * progress);
+				const interpolate = (a, b) => progress === 1 ? b : a.map((value, i) => value + (b[i] - value) * eased);
+				camera.position.fromArray(interpolate(from.position, to.position));
+				controls.target.fromArray(interpolate(from.target, to.target));
+				if (progress < 1) return;
+				printCameraTransition = null;
+				if (!enabled) previousPrintView = null;
+				sceneChan?.postMessage({type: 'view-camera', p: to.position, t: to.target, fov: camera.fov});
+			}
+
 			function preemptForGift() {
 				if (paused || !busy || active?.priority || !queue[0]?.priority) return;
 				if (phase === 'printing') {
@@ -2694,9 +2718,14 @@
 
 			function next() {
 				if (autoDemo) replenishDemo();
-				if (paused || busy || !queue.length) return;
+				if (busy) return;
+				if (paused || !queue.length) {
+					setPrintCloseUp(false);
+					return;
+				}
 				busy = true;
 				active = queue.shift();
+				setPrintCloseUp(active.size === 'large');
 				active.score = 60 + Math.floor(Math.random() * 36);
 				currentProduct = createProduct(active);
 				currentProduct.factor = active.size === 'large' ? (active.priority || String(active.source || '').startsWith('礼物') ? 1.6 : 1.35) : 1;
@@ -3231,6 +3260,7 @@
 								if (pp) pp.textContent = '当前：' + active.name + ' · 打印中 ' + pct + '%'
 							}
 							if (f === 1) {
+								setPrintCloseUp(false);
 								machineAudio.cue('complete');
 								giftSpeech.printing(active.name, true);
 								currentProduct.glintAge = 0;
@@ -3270,6 +3300,7 @@
 				});
 				updateEffects(Math.min((now - lastGlintTime) / 1000, .05));
 				lastGlintTime = now;
+				updatePrintCamera(now);
 				controls.update();
 				sceneOutput.render(scene, camera);
 				measureRender(now);
@@ -3383,6 +3414,8 @@
 				gift: 0
 			};
 
+			const liveLikeCounter = new LiveLikeCounter();
+
 			function updateLiveStats() {
 				const l = $('stat-likes'),
 					c = $('stat-comments'),
@@ -3420,14 +3453,17 @@
 					}, n, v.raw, '礼物·' + (v.raw || RULES[kind].label));
 					else if (printRules.giftVoice && printAllowed()) giftSpeech.say(name, v.raw || RULES[kind].label, n)
 				} else if (type === 'like') {
-					const n = Math.max(1, Math.min(100, Number(v.count) || 1));
-					liveStats.like += n;
+					const likes = Number(v.count);
+					if (!Number.isSafeInteger(likes) || likes <= 0) return;
+					liveStats.like += likes;
 					liveRoom = liveRoom || v.room || '';
 					updateLiveStats();
-					if (printRules.like && printAllowed()) liveEvent('like', {
-						name,
-						avatar
-					}, n, null, '点赞')
+					const prints = liveLikeCounter.add(v);
+					if (prints && printRules.like && printAllowed()) {
+						for (let remaining = prints; remaining > 0; remaining -= 100) {
+							liveEvent('like', {name, avatar}, Math.min(100, remaining), null, '点赞');
+						}
+					}
 				} else if (type === 'follow') {
 					if (printRules.follow && printAllowed()) liveEvent('like', {
 						name,
@@ -3441,6 +3477,7 @@
 					if (printRules.joinVoice && printAllowed()) giftSpeech.welcome(name)
 				} else if (type === 'hello') {
 					liveRoom = String(v.room || '');
+					liveLikeCounter.setRoom(liveRoom);
 					$('mode').textContent = '● 直播数据';
 					$('status').textContent = '数据桥已连接 · 房间 ' + liveRoom.slice(0, 16);
 					setLiveStatus(true);
@@ -3449,6 +3486,7 @@
 					if (Array.isArray(v.people) && v.people.length) lastSnapshotPeople = v.people.slice(0, 8)
 				} else if (type === 'room') {
 					liveRoom = String(v.room || '');
+					liveLikeCounter.setRoom(liveRoom);
 					setLiveStatus(true);
 					const ri = $('room-input');
 					if (ri && document.activeElement !== ri) ri.value = liveRoom
@@ -4125,29 +4163,40 @@
 				return demoPeople[Math.floor(Math.random() * demoPeople.length)]
 			}
 
-			function triggerDemo(type, amount = 1, user = randomPerson()) {
-				const r = demoEngine.event(type, user, 'demo-' + (++eventId), amount);
+			function triggerDemo(type, amount = 1, user = randomPerson(), source = RULES[type].label) {
+				const r = demoEngine.event(type, user, 'demo-' + (++eventId), amount, {label: source});
 				if (!r.duplicate) {
 					machineAudio.cue(RULES[type].priority ? 'gift' : 'queue');
 					if (RULES[type].priority) giftSpeech.say(user.name, RULES[type].label, amount)
 				}
-				logDemo(user.name + '：' + RULES[type].label + ' → ' + r.added + '张' + (r.size === 'large' ? '大图' : '小图'));
+				logDemo(user.name + '：' + source + ' → ' + r.added + '张' + (r.size === 'large' ? '大图' : '小图'));
 				preemptForGift();
 				renderQueue();
 				updateScreen();
 				next();
 				return r
 			}
-			for (const [type, label] of Object.entries({
-					like: '评论666·小图1张',
-					heart: '爱心·大图1张',
-					beer: '啤酒·大图2张',
-					lollipop: '棒棒糖·大图3张'
-				})) {
+			for (const [type, label, source] of [
+				['like', '评论666·小图1张', '评论666'],
+				['like', `点赞${LIKES_PER_PRINT}下·小图1张`, '点赞'],
+				['heart', '爱心·大图1张'],
+				['beer', '啤酒·大图2张'],
+				['lollipop', '棒棒糖·大图3张']
+			]) {
 				let b = document.createElement('button');
 				b.className = 'secondary';
 				b.textContent = label;
-				b.onclick = () => triggerDemo(type);
+				b.onclick = () => {
+					const user = demoPeople[Number(userSelect.value)] || randomPerson();
+					if (source === '点赞') {
+						const progress = demoEngine.recordLike(user);
+						if (progress) {
+							logDemo(`${user.name}：点赞 ${progress}/${LIKES_PER_PRINT}`);
+							return;
+						}
+					}
+					triggerDemo(type, 1, user, source);
+				};
 				$('rule-buttons').append(b)
 			}
 			$('avatar-files').onchange = async e => {
@@ -4192,6 +4241,7 @@
 			$('demo-speed').onchange = () => simulationSpeed = Number($('demo-speed').value);
 
 			function resetDemo() {
+				setPrintCloseUp(false);
 				giftSpeech.stop();
 				machineAudio.cue('reset');
 				if (currentProduct) disposeProduct(currentProduct);
